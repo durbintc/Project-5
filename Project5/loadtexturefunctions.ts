@@ -29,12 +29,15 @@ let p:mat4; //local projection
 let umode:WebGLUniformLocation
 //shader variable indices for material properties
 let vPosition:GLint; //
-let vNormal:GLint
+let vNormal:GLint;
+let vTangent:GLint;
 let vTexCoord:GLint;
 
 let uEarthMap:WebGLUniformLocation;//this will be a pointer to our sampler2D
 let uSpecularMap:WebGLUniformLocation;
 let uNightMap:WebGLUniformLocation;
+let uNormalMap:WebGLUniformLocation;
+let uCloudMap:WebGLUniformLocation;
 
 let vAmbientDiffuseColor:WebGLUniformLocation; //Ambient and Diffuse can be the same for the material
 let vSpecularColor:WebGLUniformLocation; //highlight color
@@ -67,11 +70,15 @@ let checkerTex:WebGLTexture;
 let earthTex:WebGLTexture;
 let specularTex:WebGLTexture;
 let nightTex:WebGLTexture;
+let normalTex:WebGLTexture;
+let cloudTex:WebGLTexture;
 
 //and we need a main memory location to load the files into
 let earthImg:HTMLImageElement;
 let specularImg:HTMLImageElement;
 let nightImg:HTMLImageElement;
+let normalImg:HTMLImageElement;
+let cloudImg:HTMLImageElement;
 
 let anisotropic_ext:EXT_texture_filter_anisotropic;
 
@@ -120,6 +127,7 @@ window.onload = function init() {
     uEarthMap = gl.getUniformLocation(program, "earthMap");//get reference to sampler2D
     uSpecularMap = gl.getUniformLocation(program, "specularMap");
     uNightMap = gl.getUniformLocation(program, "nightMap");
+    uNormalMap = gl.getUniformLocation(program, "normalMap");
 
 
     //set up basic perspective viewing
@@ -206,31 +214,48 @@ function generateSphere(subdiv:number){
 
     for (let lat:number = 0; lat <= Math.PI ; lat += step){ //latitude
         for (let lon:number = 0; lon + step <= 2*Math.PI; lon += step){ //longitude
-            let u1 = 1 - (lon/(2 * Math.PI));
-            let u2 = 1 - ((lon + step)/(2 * Math.PI));
-            let v1 = 1 - lat/(Math.PI);
-            let v2 = 1 - (lat + step)/(Math.PI);
+            let u1 = (lon/(2 * Math.PI));
+            let u2 = ((lon + step)/(2 * Math.PI));
+            let v1 = -(lat/(Math.PI));
+            let v2 = -(lat + step)/(Math.PI);
+
+            let tangent1:vec4;
+            let tangent2:vec4;
+            tangent1 = new vec4(0, 1, 0, 0).cross(new vec4(Math.sin(lat) * Math.sin(lon), Math.cos(lat), Math.cos(lon) * Math.sin(lat), 0.0));
+            tangent2 = new vec4(0,1,0,0).cross(new vec4(Math.sin(lat + step) * Math.sin(lon + step),  Math.cos(lat + step),Math.cos(lon + step) * Math.sin(lat + step), 0.0));
+
+            if (tangent1[0] === 0 && tangent1[1] === 0 && tangent1[2] === 0)
+                tangent1 = new vec4(1,0,0,0);
+
+            if (tangent2[0] === 0 && tangent2[1] === 0 && tangent2[2] === 0)
+                tangent2 = new vec4(1,0,0,0);
 
             //triangle 1
             sphereverts.push(new vec4(Math.sin(lat) * Math.sin(lon) ,Math.cos(lat) , Math.cos(lon) * Math.sin(lat), 1.0));
             sphereverts.push(new vec4(Math.sin(lat) * Math.sin(lon), Math.cos(lat),Math.cos(lon) * Math.sin(lat),  0.0));
+            sphereverts.push(tangent1);
             sphereverts.push(new vec2(u1, v1));
             sphereverts.push(new vec4(Math.sin(lat) * Math.sin(lon + step), Math.cos(lat),Math.sin(lat) * Math.cos(lon + step),  1.0));
             sphereverts.push(new vec4(Math.sin(lat) * Math.sin(lon + step),  Math.cos(lat),Math.sin(lat) * Math.cos(lon + step), 0.0));
+            sphereverts.push(tangent1);
             sphereverts.push(new vec2(u2, v1));
             sphereverts.push(new vec4(Math.sin(lat + step) * Math.sin(lon + step), Math.cos(lat + step),Math.cos(lon + step) * Math.sin(lat + step),  1.0));
             sphereverts.push(new vec4(Math.sin(lat + step) * Math.sin(lon + step), Math.cos(lat + step),Math.cos(lon + step) * Math.sin(lat + step),  0.0));
+            sphereverts.push(tangent2);
             sphereverts.push(new vec2(u2, v2));
 
             //triangle 2
             sphereverts.push(new vec4(Math.sin(lat + step) * Math.sin(lon + step),  Math.cos(lat + step),Math.cos(lon + step) * Math.sin(lat + step), 1.0));
             sphereverts.push(new vec4(Math.sin(lat + step) * Math.sin(lon + step),  Math.cos(lat + step),Math.cos(lon + step) * Math.sin(lat + step), 0.0));
+            sphereverts.push(tangent2);
             sphereverts.push(new vec2(u2, v2));
             sphereverts.push(new vec4(Math.sin(lat + step) * Math.sin(lon), Math.cos(lat + step),Math.sin(lat + step) * Math.cos(lon),  1.0));
             sphereverts.push(new vec4(Math.sin(lat + step) * Math.sin(lon), Math.cos(lat + step), Math.sin(lat + step) * Math.cos(lon), 0.0));
+            sphereverts.push(tangent2);
             sphereverts.push(new vec2(u1, v2));
             sphereverts.push(new vec4(Math.sin(lat) * Math.sin(lon), Math.cos(lat),Math.cos(lon) * Math.sin(lat),  1.0));
             sphereverts.push(new vec4(Math.sin(lat) * Math.sin(lon),  Math.cos(lat),Math.cos(lon) * Math.sin(lat), 0.0));
+            sphereverts.push(tangent1);
             sphereverts.push(new vec2(u1, v1));
         }
     }
@@ -240,47 +265,20 @@ function generateSphere(subdiv:number){
     gl.bufferData(gl.ARRAY_BUFFER, flatten(sphereverts), gl.STATIC_DRAW);
 
     vPosition = gl.getAttribLocation(program, "vPosition");
-    gl.vertexAttribPointer(vPosition, 4, gl.FLOAT, false, 40, 0); //stride is 24 bytes total for position, texcoord
+    gl.vertexAttribPointer(vPosition, 4, gl.FLOAT, false, 56, 0); //stride is 24 bytes total for position, texcoord
     gl.enableVertexAttribArray(vPosition);
 
     vNormal = gl.getAttribLocation(program, "vNormal");
-    gl.vertexAttribPointer(vNormal, 4, gl.FLOAT, false, 40, 16); //stride is 24 bytes total for position, texcoord
+    gl.vertexAttribPointer(vNormal, 4, gl.FLOAT, false, 56, 16); //stride is 24 bytes total for position, texcoord
     gl.enableVertexAttribArray(vNormal);
 
-    vTexCoord = gl.getAttribLocation(program, "texCoord");
-    gl.vertexAttribPointer(vTexCoord, 2, gl.FLOAT, false, 40, 32); //stride is 24 bytes total for position, texcoord
-    gl.enableVertexAttribArray(vTexCoord);
-}
-
-//Make a square and send it over to the graphics card
-function makeSquareAndBuffer(){
-    let squarePoints:any[] = []; //empty array
-
-    //create 4 vertices and add them to the array
-    squarePoints.push(new vec4(-1, -1, 0, 1));
-    squarePoints.push(new vec2(0,0)); //texture coordinates, bottom left
-    squarePoints.push(new vec4(1, -1, 0, 1));
-    squarePoints.push(new vec2(1,0)); //texture coordinates, bottom right
-    squarePoints.push(new vec4(1, 1, 0, 1));
-    squarePoints.push(new vec2(1,1)); //texture coordinates, top right
-    squarePoints.push(new vec4(-1, 1, 0, 1));
-    squarePoints.push(new vec2(0,1)); //texture coordinates, top left
-
-    //we need some graphics memory for this information
-    let bufferId:WebGLBuffer = gl.createBuffer();
-    //tell WebGL that the buffer we just created is the one we want to work with right now
-    gl.bindBuffer(gl.ARRAY_BUFFER, bufferId);
-    //send the local data over to this buffer on the graphics card.  Note our use of Angel's "flatten" function
-    gl.bufferData(gl.ARRAY_BUFFER, flatten(squarePoints), gl.STATIC_DRAW);
-
-    vPosition = gl.getAttribLocation(program, "vPosition");
-    gl.vertexAttribPointer(vPosition, 4, gl.FLOAT, false, 24, 0); //stride is 24 bytes total for position, texcoord
-    gl.enableVertexAttribArray(vPosition);
+    vTangent = gl.getAttribLocation(program, "vTangent");
+    gl.vertexAttribPointer(vTangent, 4, gl.FLOAT, false, 56, 32); //stride is 24 bytes total for position, texcoord
+    gl.enableVertexAttribArray(vTangent);
 
     vTexCoord = gl.getAttribLocation(program, "texCoord");
-    gl.vertexAttribPointer(vTexCoord, 2, gl.FLOAT, false, 24, 16); //stride is 24 bytes total for position, texcoord
+    gl.vertexAttribPointer(vTexCoord, 2, gl.FLOAT, false, 56, 48); //stride is 24 bytes total for position, texcoord
     gl.enableVertexAttribArray(vTexCoord);
-
 }
 
 //update rotation angles based on mouse movement
@@ -331,6 +329,11 @@ function initTextures() {
     nightImg = new Image();
     nightImg.onload = () => handleTextureLoaded(nightImg, nightTex);
     nightImg.src = "EarthNight.png";
+
+    normalTex = gl.createTexture();
+    normalImg = new Image();
+    normalImg.onload = () => handleTextureLoaded(normalImg, normalTex);
+    normalImg.src = "EarthNormal.png";
 }
 
 //TODO There are a bunch of things we need to define for each texture
@@ -351,8 +354,8 @@ function handleTextureLoaded(image:HTMLImageElement, texture:WebGLTexture) {
 
 function update(){
     //alter the rotation angle
-    rotateAngle += 1;
-    while (rotateAngle >= 360){
+    rotateAngle += .5;
+    if (rotateAngle >= 360){
         rotateAngle -= 360;
     }
 
@@ -391,6 +394,10 @@ function render(){
     gl.bindTexture(gl.TEXTURE_2D, nightTex);
     gl.uniform1i(uNightMap, 2);
 
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, normalTex);
+    gl.uniform1i(uNormalMap, 3);
+
     //note that if we have one value that should be applied to all the vertices,
     //we can send it over just once even if it's an attribute and not a uniform
     gl.uniform4fv(vAmbientDiffuseColor, [1, 1, 1, 1]);
@@ -407,9 +414,9 @@ function render(){
     //gl.disable(gl.BLEND);
     //gl.depthMask(true);
 
-    if (mode = 4) {
-        mv = mv.mult(scalem(1.1, 1.1, 1.1));
-        gl.uniformMatrix4fv(umv, false, mv.flatten());
-        gl.drawArrays(gl.TRIANGLES, 0, sphereverts.length);
-    }
+    // if (mode == 4) {
+    //     mv = mv.mult(scalem(1.1, 1.1, 1.1));
+    //     gl.uniformMatrix4fv(umv, false, mv.flatten());
+    //     gl.drawArrays(gl.TRIANGLES, 0, sphereverts.length);
+    // }
 }
